@@ -11,4 +11,10 @@
 
 На стороне ПК, python скрипт принимает, обрабатывает и визуализирует траекторию полёта.
 
-$E = mc^2$ 
+$ dx/dt = f(t,x) $
+
+$ k_{1} = f(t_{n}, x_{n}) $
+$ k_{2} = f(t_{n} + \frac{\Delta t}{2}, x_n + \frac{\Delta t}{2} * k_{1}) $
+$ k_{3} = f(t_{n} + \frac{\Delta t}{2}, x_n + \frac{\Delta t}{2} * k_{2}) $
+$ k_{4} = f(t_{n} + \Delta t, x_{n} + \Delta t*k_3) $
+$ x_{n+1} = x_{n} + \frac{\Delta t}{6} * (k_1 + 2*k_2 + 2*k_3 + k_4)
