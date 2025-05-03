@@ -7,14 +7,19 @@
 
 Используется отладочную плату Arduino, в качестве инерциального модуля – GY-521 (MPU6050).
 
-В качестве метода используется фильтр Калмана.
+В качестве метода используется метод Рунге-Кутты 4-го порядка:
+
+Уравнение: $\frac{dx}{dt} = f(t, x)$
+
+Шаги метода:
+$$
+\begin{aligned}
+k_{1} &= f(t_{n}, x_{n}) \\
+k_{2} &= f\left(t_{n} + \frac{\Delta t}{2}, x_n + \frac{\Delta t}{2} \cdot k_{1}\right) \\
+k_{3} &= f\left(t_{n} + \frac{\Delta t}{2}, x_n + \frac{\Delta t}{2} \cdot k_{2}\right) \\
+k_{4} &= f(t_{n} + \Delta t, x_{n} + \Delta t \cdot k_3) \\
+x_{n+1} &= x_{n} + \frac{\Delta t}{6} \cdot (k_1 + 2k_2 + 2k_3 + k_4)
+\end{aligned}
+$$
 
 На стороне ПК, python скрипт принимает, обрабатывает и визуализирует траекторию полёта.
-
-$ dx/dt = f(t,x) $
-
-$ k_{1} = f(t_{n}, x_{n}) $
-$ k_{2} = f(t_{n} + \frac{\Delta t}{2}, x_n + \frac{\Delta t}{2} * k_{1}) $
-$ k_{3} = f(t_{n} + \frac{\Delta t}{2}, x_n + \frac{\Delta t}{2} * k_{2}) $
-$ k_{4} = f(t_{n} + \Delta t, x_{n} + \Delta t*k_3) $
-$ x_{n+1} = x_{n} + \frac{\Delta t}{6} * (k_1 + 2*k_2 + 2*k_3 + k_4)
