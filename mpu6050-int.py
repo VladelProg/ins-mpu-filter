@@ -14,8 +14,7 @@ from matplotlib.patches import FancyArrowPatch
 from mpl_toolkits.mplot3d import proj3d
 from madgwick_filter import Madgwick
 
-
-# === RK4 функция интегрирования ===
+# функция Рунге-Кутта
 def rk4_step(f, t, y, dt, *args):
     k1 = f(t, y, *args)
     k2 = f(t + dt / 2, y + dt * k1 / 2, *args)
@@ -29,8 +28,7 @@ def deriv(t, state, acceleration):
         acceleration[0], acceleration[1], acceleration[2]
     ])
 
-# === Класс стрелок для осей ===
-# === Класс стрелок для осей ===
+# Класс стрелок для осей
 class Arrow3D(FancyArrowPatch):
     def __init__(self, xs, ys, zs, *args, **kwargs):
         super().__init__((0,0), (0,0), *args, **kwargs)
@@ -49,11 +47,11 @@ class Arrow3D(FancyArrowPatch):
         self.set_positions((xs[0], ys[0]), (xs[1], ys[1]))
         super().draw(renderer)
 
-# === Главное окно приложения ===
+# Главное окно приложения
 class TrajectoryViewer(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("IMU Траектория из CSV")
+        self.setWindowTitle("IMU Траектория")
         self.setGeometry(100, 100, 1600, 900)
 
         self.init_ui()
@@ -197,15 +195,15 @@ class TrajectoryViewer(QMainWindow):
 
         traj = self.trajectory[:frame+1]
 
-        # === Обновляем основную траекторию ===
+        # Обновляем основную траекторию
         self.ax.clear()
         self.ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], label="Траектория")
-        self.ax.set_title("Траектория (Маджвик + RK4)")
+        self.ax.set_title("Траектория")
         self.ax.set_xlabel("X")
         self.ax.set_ylabel("Y")
         self.ax.set_zlabel("Z")
 
-        # === Обновляем ориентацию ===
+        # Обновляем ориентацию
         self.ax_orientation.clear()
         R = self.rotations[frame]
         self.draw_orientation(R)
@@ -257,8 +255,6 @@ class TrajectoryViewer(QMainWindow):
         fig_export.savefig("trajectory_export.png", dpi=150)
         print("График сохранён как trajectory_export.png")
 
-
-# === Запуск приложения ===
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = TrajectoryViewer()
