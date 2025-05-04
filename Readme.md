@@ -31,3 +31,4 @@ $$x_{n+1} = x_{n} + \frac{\Delta t}{6} \cdot (k_1 + 2k_2 + 2k_3 + k_4)$$
 ```python
 pip install pyserial numpy pandas PyQt5 matplotlib
 ```
+![Результаты работы](ezgif-8d03efb8ddddd4.gif)
