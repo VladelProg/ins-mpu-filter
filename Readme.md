@@ -26,3 +26,8 @@ $$k_{4} = f(t_{n} + \Delta t, x_{n} + \Delta t \cdot k_3)$$
 $$x_{n+1} = x_{n} + \frac{\Delta t}{6} \cdot (k_1 + 2k_2 + 2k_3 + k_4)$$
 
 На стороне ПК, python скрипт принимает, обрабатывает и визуализирует траекторию полёта.
+
+**Установка**
+```python
+pip install pyserial numpy pandas PyQt5 matplotlib
+```
