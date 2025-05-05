@@ -2,7 +2,7 @@
 #include <MPU6050_light.h>
 #include <MadgwickAHRS.h>
 
-MPU6050 mpu;
+MPU6050 mpu(Wire);
 Madgwick filter;  // AHRS фильтр Маджвика
 
 // Переменные для хранения данных
@@ -19,9 +19,16 @@ float dt = 0.01f;  // ~100 Гц
 void setup() {
   Serial.begin(9600);
   Wire.begin();
-  mpu.begin();
-  mpu.calibrate();
-
+  
+  byte status = mpu.begin();
+  Serial.print(F("MPU6050 status: "));
+  Serial.println(status);
+  while(status!=0){ }
+  
+  Serial.println(F("Калиброка датчика. Не трогайте MPU6050"));
+  delay(1000);
+  mpu.calcOffsets(true,true);
+  Serial.println("Done!\n");
   filter.begin(100.0f);  // частота обновления фильтра
 }
 
@@ -55,11 +62,14 @@ void loop() {
   z += vz * dt;
 
   // Отправляем данные на ПК
-  Serial.print("data:\t");
-  Serial.print(x); Serial.print("\t");
-  Serial.print(y); Serial.print("\t");
-  Serial.print(z); Serial.print("\t");
-  Serial.print(roll * 57.2958); Serial.print("\t");   // радианы → градусы
-  Serial.print(pitch * 57.2958); Serial.print("\t");
-  Serial.println(yaw * 57.2958);
+  if(millis() - timer > 10){ 
+    Serial.print("data:\t");
+    Serial.print(x); Serial.print("\t");
+    Serial.print(y); Serial.print("\t");
+    Serial.print(z); Serial.print("\t");
+    Serial.print(roll * 57.2958); Serial.print("\t");   // радианы → градусы
+    Serial.print(pitch * 57.2958); Serial.print("\t");
+    Serial.println(yaw * 57.2958);
+    timer = millis()
+  }
 }
