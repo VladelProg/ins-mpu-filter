@@ -3,6 +3,7 @@ import time
 import numpy as np
 from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton, QLabel
 from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QHBoxLayout
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.patches import FancyArrowPatch
@@ -73,7 +74,7 @@ class IMUVisualizer(QMainWindow):
         self.fig_orient = Figure(figsize=(4, 4))
         self.canvas_orient = FigureCanvas(self.fig_orient)
         self.ax_orient = self.fig_orient.add_subplot(111, projection='3d')
-        self.draw_orientation(np.eye(3))
+        self.plot_orientation()
         layout.addWidget(self.canvas_orient)
 
         self.setCentralWidget(main_widget)
@@ -97,8 +98,10 @@ class IMUVisualizer(QMainWindow):
     def update_plot(self):
         while self.serial_port and self.serial_port.in_waiting > 0:
             line = self.serial_port.readline().decode().strip()
+            print(line)
             if line.startswith("data:"):
                 parts = line.split()[1:]  # пропускаем метку
+
                 if len(parts) == 6:
                     x, y, z, roll_deg, pitch_deg, yaw_deg = map(float, parts)
 
