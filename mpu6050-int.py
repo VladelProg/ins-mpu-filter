@@ -14,6 +14,9 @@ from madgwick_filter import Madgwick
 import serial
 import pandas as pd
 
+PORT = "COM3" # Подключаемый порт
+BAUD = 9600   # Скорость
+MILLS = 10    # Частота опроса
 # === RK4 функция интегрирования ===
 def rk4_step(f, t, y, dt, *args):
     k1 = f(t, y, *args)
@@ -53,7 +56,7 @@ class IMUApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("IMU Траектория: Serial + CSV")
+        self.setWindowTitle("IMU Траектория")
         self.setGeometry(100, 100, 1800, 900)
 
         # Переменные для реального времени
@@ -152,11 +155,11 @@ class IMUApp(QMainWindow):
     def toggle_serial(self):
         if not self.serial_port:
             try:
-                self.serial_port = serial.Serial('COM3', 9600, timeout=1)
+                self.serial_port = serial.Serial(PORT, BAUD, timeout=1)
                 self.btn_connect.setText("Отключиться от COM-порта")
                 self.label_status.setText("Статус: подключено")
                 self.start_time = time.time()
-                self.timer.start(50)
+                self.timer.start(MILLS)
             except Exception as e:
                 self.label_status.setText(f"Ошибка подключения: {e}")
         else:
@@ -172,9 +175,8 @@ class IMUApp(QMainWindow):
             #print(line)
             if line.startswith("a/g:"):
                 parts = line.split()[1:]  # пропускаем "a/g:"
-                print(len(parts))
+                #print(len(parts))
                 if len(parts) == 11:
-
                     ax, ay, az, gx, gy, gz = map(float, parts[:6])
                     acc_roll_deg, acc_pitch_deg = map(float, parts[6:8])
                     self.process_realtime_data(ax, ay, az, gx, gy, gz, acc_roll_deg, acc_pitch_deg)
