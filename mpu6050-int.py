@@ -3,7 +3,7 @@ import time
 import numpy as np
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget,
-    QPushButton, QLabel, QHBoxLayout
+    QPushButton, QLabel, QHBoxLayout, QFileDialog, QSlider
 )
 from PyQt5.QtCore import Qt, QTimer
 from matplotlib.figure import Figure
@@ -12,6 +12,7 @@ from matplotlib.patches import FancyArrowPatch
 from mpl_toolkits.mplot3d import proj3d
 from madgwick_filter import Madgwick
 import serial
+import pandas as pd
 
 # === RK4 функция интегрирования ===
 def rk4_step(f, t, y, dt, *args):
@@ -45,40 +46,49 @@ class Arrow3D(FancyArrowPatch):
         self.set_positions((xs[0], ys[0]), (xs[1], ys[1]))
         super().draw(renderer)
 
-# === Главное окно приложения с Serial ===
-class RealTimeIMUViewer(QMainWindow):
-    MAX_POINTS = 100  # показываем последние N точек
-    ALPHA = 0.95       # коэффициент low-pass фильтра
+# === Главный класс приложения с Serial и CSV ===
+class IMUApp(QMainWindow):
+    MAX_POINTS = 100
+    ALPHA = 0.95
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Реальное время IMU")
+        self.setWindowTitle("IMU Траектория: Serial + CSV")
         self.setGeometry(100, 100, 1800, 900)
 
-        self.init_ui()
+        # Переменные для реального времени
         self.serial_port = None
         self.start_time = None
+        self.mad_realtime = Madgwick(sample_period=1/100, beta=0.1)
+        self.state_realtime = np.zeros(6)
+        self.trajectory_realtime = []
+        self.rotations_realtime = []
 
-        # Переменные для фильтрации и интегрирования
-        self.mad = Madgwick(sample_period=1/100, beta=0.1)
-        self.state = np.zeros(6)  # x, y, z, vx, vy, vz
-        self.trajectory = []
-        self.rotations = []
-
-        # Углы Эйлера
+        # Углы из Serial
         self.roll_data = []
         self.pitch_data = []
         self.yaw_data = []
         self.acc_roll_data = []
         self.acc_pitch_data = []
 
-        # Фильтрованные данные
-        self.ax_filtered = 0
-        self.ay_filtered = 0
-        self.az_filtered = 0
-        self.gx_filtered = 0
-        self.gy_filtered = 0
-        self.gz_filtered = 0
+        # Для CSV
+        self.csv_times = []
+        self.csv_accs = []
+        self.csv_gyros = []
+        self.csv_traj = []
+        self.csv_rotations = []
+
+        # Углы из CSV
+        self.roll_data_csv = []
+        self.pitch_data_csv = []
+        self.yaw_data_csv = []
+
+        # Слайдер
+        self.slider_value = 0
+
+        self.init_ui()
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_plot)
 
     def init_ui(self):
         main_widget = QWidget()
@@ -86,15 +96,33 @@ class RealTimeIMUViewer(QMainWindow):
 
         left_layout = QVBoxLayout()
 
-        self.connect_button = QPushButton("Подключиться к COM-порту")
-        self.connect_button.clicked.connect(self.toggle_serial)
-        left_layout.addWidget(self.connect_button)
+        self.btn_connect = QPushButton("Подключиться к COM-порту")
+        self.btn_connect.clicked.connect(self.toggle_serial)
+        left_layout.addWidget(self.btn_connect)
 
-        self.label_drift = QLabel("Дрейф: -- м")
+        self.btn_load_csv = QPushButton("Загрузить CSV файл")
+        self.btn_load_csv.clicked.connect(self.load_csv)
+        left_layout.addWidget(self.btn_load_csv)
+
         self.label_status = QLabel("Статус: не подключено")
+        self.label_drift_realtime = QLabel("Дрейф (реальное время): -- м")
+        self.label_drift_csv = QLabel("Дрейф (из CSV): -- м")
 
         left_layout.addWidget(self.label_status)
-        left_layout.addWidget(self.label_drift)
+        left_layout.addWidget(self.label_drift_realtime)
+        left_layout.addWidget(self.label_drift_csv)
+
+        # Слайдер прокрутки CSV
+        self.slider_label = QLabel("Кадр (CSV): 0")
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setMinimum(0)
+        self.slider.setMaximum(0)
+        self.slider.setValue(0)
+        self.slider.setEnabled(False)
+        self.slider.valueChanged.connect(self.on_slider_change)
+
+        left_layout.addWidget(self.slider_label)
+        left_layout.addWidget(self.slider)
 
         layout.addLayout(left_layout)
 
@@ -102,37 +130,30 @@ class RealTimeIMUViewer(QMainWindow):
         self.fig_traj = Figure(figsize=(8, 6))
         self.canvas_traj = FigureCanvas(self.fig_traj)
         self.ax_traj = self.fig_traj.add_subplot(111, projection='3d')
-        self.ax_traj.set_title("Траектория в реальном времени")
         layout.addWidget(self.canvas_traj)
 
         # График ориентации
         self.fig_orient = Figure(figsize=(4, 4))
         self.canvas_orient = FigureCanvas(self.fig_orient)
         self.ax_orient = self.fig_orient.add_subplot(111, projection='3d')
-        self.ax_orient.set_title("Ориентация объекта")
-        self.draw_orientation(np.eye(3))  # начальная ориентация
+        self.draw_orientation(np.eye(3))
         layout.addWidget(self.canvas_orient)
 
-        # График углов Roll/Pitch/Yaw
+        # График углов
         self.fig_angles = Figure(figsize=(4, 4))
         self.canvas_angles = FigureCanvas(self.fig_angles)
         self.ax_angles = self.fig_angles.add_subplot(111)
-        self.ax_angles.set_title("Углы Эйлера (градусы)")
-        self.ax_angles.set_ylabel("Угол (°)")
+        self.ax_angles.set_title("Roll / Pitch / Yaw (градусы)")
         self.ax_angles.legend(["Roll", "Pitch", "Yaw"])
         layout.addWidget(self.canvas_angles)
 
         self.setCentralWidget(main_widget)
 
-        # Таймер для обновления графиков
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_plot)
-
     def toggle_serial(self):
         if not self.serial_port:
             try:
                 self.serial_port = serial.Serial('COM3', 9600, timeout=1)
-                self.connect_button.setText("Отключиться от COM-порта")
+                self.btn_connect.setText("Отключиться от COM-порта")
                 self.label_status.setText("Статус: подключено")
                 self.start_time = time.time()
                 self.timer.start(50)
@@ -141,114 +162,196 @@ class RealTimeIMUViewer(QMainWindow):
         else:
             self.serial_port.close()
             self.serial_port = None
-            self.connect_button.setText("Подключиться к COM-порту")
+            self.btn_connect.setText("Подключиться к COM-порту")
             self.label_status.setText("Статус: не подключено")
             self.timer.stop()
 
     def update_plot(self):
         while self.serial_port and self.serial_port.in_waiting > 0:
             line = self.serial_port.readline().decode('utf-8').strip()
+            #print(line)
             if line.startswith("a/g:"):
                 parts = line.split()[1:]  # пропускаем "a/g:"
+                print(len(parts))
                 if len(parts) == 11:
-                    ax, ay, az, gx, gy, gz, acc_roll_deg, acc_pitch_deg, _, _, _ = map(float, parts)
-                    self.process_data(ax, ay, az, gx, gy, gz, acc_roll_deg, acc_pitch_deg)
 
-        self.plot_trajectory()
+                    ax, ay, az, gx, gy, gz = map(float, parts[:6])
+                    acc_roll_deg, acc_pitch_deg = map(float, parts[6:8])
+                    self.process_realtime_data(ax, ay, az, gx, gy, gz, acc_roll_deg, acc_pitch_deg)
+
+        self.plot_trajectories()
         self.plot_orientation()
         self.plot_euler_angles()
 
-    def process_data(self, ax, ay, az, gx, gy, gz, acc_roll_deg, acc_pitch_deg):
+    def process_realtime_data(self, ax, ay, az, gx, gy, gz, acc_roll_deg, acc_pitch_deg):
         now = time.time()
-        if not hasattr(self, 'last_time'):
-            self.last_time = now
+        if not hasattr(self, 'last_time_realtime'):
+            self.last_time_realtime = now
             return
 
-        dt = now - self.last_time
-        self.last_time = now
+        dt = now - self.last_time_realtime
+        self.last_time_realtime = now
 
-        # Применяем Low-Pass фильтр
-        self.ax_filtered = self.ALPHA * ax + (1 - self.ALPHA) * self.ax_filtered
-        self.ay_filtered = self.ALPHA * ay + (1 - self.ALPHA) * self.ay_filtered
-        self.az_filtered = self.ALPHA * az + (1 - self.ALPHA) * self.az_filtered
-        self.gx_filtered = self.ALPHA * gx + (1 - self.ALPHA) * self.gx_filtered
-        self.gy_filtered = self.ALPHA * gy + (1 - self.ALPHA) * self.gy_filtered
-        self.gz_filtered = self.ALPHA * gz + (1 - self.ALPHA) * self.gz_filtered
+        # Low-pass фильтр
+        self.ax_filtered = self.ALPHA * ax + (1 - self.ALPHA) * getattr(self, 'ax_filtered', ax)
+        self.ay_filtered = self.ALPHA * ay + (1 - self.ALPHA) * getattr(self, 'ay_filtered', ay)
+        self.az_filtered = self.ALPHA * az + (1 - self.ALPHA) * getattr(self, 'az_filtered', az)
+        self.gx_filtered = self.ALPHA * gx + (1 - self.ALPHA) * getattr(self, 'gx_filtered', gx)
+        self.gy_filtered = self.ALPHA * gy + (1 - self.ALPHA) * getattr(self, 'gy_filtered', gy)
+        self.gz_filtered = self.ALPHA * gz + (1 - self.ALPHA) * getattr(self, 'gz_filtered', gz)
 
-        # Обновляем фильтр Маджвика
-        self.mad.sample_period = dt
-        self.mad.update([self.gx_filtered, self.gy_filtered, self.gz_filtered],
-                        [self.ax_filtered, self.ay_filtered, self.az_filtered])
+        # Фильтр Маджвика
+        self.mad_realtime.sample_period = dt
+        self.mad_realtime.update([self.gx_filtered, self.gy_filtered, self.gz_filtered],
+                                 [self.ax_filtered, self.ay_filtered, self.az_filtered])
 
-        R = self.mad.get_rotation_matrix()
+        R = self.mad_realtime.get_rotation_matrix()
         acc_global = R @ [self.ax_filtered, self.ay_filtered, self.az_filtered]
 
-        self.state = rk4_step(deriv, now, self.state, dt, acc_global)
-        self.trajectory.append(self.state[:3].copy())
-        self.rotations.append(R.copy())
+        # Интегрируем RK4
+        self.state_realtime = rk4_step(deriv, now, self.state_realtime, dt, acc_global)
+        self.trajectory_realtime.append(self.state_realtime[:3].copy())
+        self.rotations_realtime.append(R.copy())
 
-        # Сохраняем углы из Маджвика
-        roll_mad, pitch_mad, yaw_mad = self.mad.get_euler_angles()
+
+        # Сохраняем углы Эйлера
+        roll_mad, pitch_mad, yaw_mad = self.mad_realtime.get_euler_angles()
         self.roll_data.append(roll_mad)
         self.pitch_data.append(pitch_mad)
         self.yaw_data.append(yaw_mad)
-
-        # Сохраняем акселерометр
         self.acc_roll_data.append(np.radians(acc_roll_deg))
         self.acc_pitch_data.append(np.radians(acc_pitch_deg))
 
-        # Ограничиваем количество точек
+        # Ограничиваем буфер
         for data in [self.roll_data, self.pitch_data, self.yaw_data,
-                     self.acc_roll_data, self.acc_pitch_data, self.trajectory, self.rotations]:
+                     self.acc_roll_data, self.acc_pitch_data,
+                     self.trajectory_realtime, self.rotations_realtime]:
             if len(data) > self.MAX_POINTS:
                 data.pop(0)
 
-    def plot_trajectory(self):
-        if not self.trajectory:
+    def load_csv(self):
+        filename, _ = QFileDialog.getOpenFileName(self, "Открыть CSV файл", "", "CSV Files (*.csv)")
+        if not filename:
             return
 
-        traj = np.array(self.trajectory)
+        try:
+            df = pd.read_csv(filename)
+
+            required_columns = ['timestamp', 'ax', 'ay', 'az', 'gx', 'gy', 'gz']
+            if not all(col in df.columns for col in required_columns):
+                raise ValueError("В CSV отсутствуют необходимые колонки")
+
+            times = df['timestamp'].values
+            accs = df[['ax', 'ay', 'az']].values
+            gyros = df[['gx', 'gy', 'gz']].values
+
+            # Очистка предыдущих данных CSV
+            self.csv_traj = []
+            self.csv_rotations = []
+            self.roll_data_csv = []
+            self.pitch_data_csv = []
+            self.yaw_data_csv = []
+
+            # Обработка CSV
+            mad_csv = Madgwick(sample_period=1/100, beta=0.1)
+            state_csv = np.zeros(6)
+            traj_csv = [state_csv[:3].copy()]
+            rotations_csv = []
+
+            for i in range(1, len(times)):
+                dt = times[i] - times[i - 1]
+                mad_csv.sample_period = dt
+                mad_csv.update(gyros[i], accs[i])
+
+                R = mad_csv.get_rotation_matrix()
+                acc_global = R @ accs[i]
+
+                state_csv = rk4_step(deriv, times[i - 1], state_csv, dt, acc_global)
+                traj_csv.append(state_csv[:3].copy())
+                rotations_csv.append(R.copy())
+
+                # Сохраняем углы из фильтра
+                roll_mad, pitch_mad, yaw_mad = mad_csv.get_euler_angles()
+                self.roll_data_csv.append(roll_mad)
+                self.pitch_data_csv.append(pitch_mad)
+                self.yaw_data_csv.append(yaw_mad)
+
+            # Сохраняем
+            self.csv_traj = np.array(traj_csv)
+            self.csv_rotations = rotations_csv
+
+            # Активируем слайдер
+            self.slider.setMinimum(0)
+            self.slider.setMaximum(len(self.csv_traj) - 1)
+            self.slider.setValue(0)
+            self.slider.setEnabled(True)
+            self.slider_label.setText(f"Кадр (CSV): 0")
+
+            drift_csv = np.linalg.norm(self.csv_traj[-1]) if len(self.csv_traj) > 0 else 0
+            self.label_drift_csv.setText(f"Дрейф (из CSV): {drift_csv:.3f} м")
+
+        except Exception as e:
+            print(f"Ошибка при чтении CSV: {e}")
+            self.label_status.setText(f"Ошибка CSV: {e}")
+
+    def on_slider_change(self, value):
+        self.slider_value = value
+        self.slider_label.setText(f"Кадр (CSV): {value}")
+        self.plot_trajectories()
+        self.plot_euler_angles()
+
+    def plot_trajectories(self):
         self.ax_traj.clear()
-        self.ax_traj.plot(traj[:, 0], traj[:, 1], traj[:, 2])
+        self.ax_traj.set_title("Сравнение: Реальное время vs CSV")
+
+        # Реальные данные
+        if self.trajectory_realtime:
+            traj_rt = np.array(self.trajectory_realtime)
+            self.ax_traj.plot(traj_rt[:, 0], traj_rt[:, 1], traj_rt[:, 2], label="Реальное время", color='b')
+
+        # CSV данные — от 0 до текущего слайдера
+        if len(self.csv_traj) > 0:
+            end_index = self.slider_value + 1
+            traj_csv = self.csv_traj[:end_index]
+            self.ax_traj.plot(traj_csv[:, 0], traj_csv[:, 1], traj_csv[:, 2], label=f"Из CSV до {end_index}", color='r', linestyle='--')
+
         self.ax_traj.set_xlabel("X (м)")
         self.ax_traj.set_ylabel("Y (м)")
         self.ax_traj.set_zlabel("Z (м)")
-        self.ax_traj.set_title("Траектория в реальном времени")
+        self.ax_traj.legend()
+        self.ax_traj.grid(True)
         self.canvas_traj.draw()
 
-        drift = np.linalg.norm(self.trajectory[-1]) if self.trajectory else 0
-        self.label_drift.setText(f"Дрейф: {drift:.3f} м")
-
     def plot_orientation(self):
-        if not self.rotations:
-            return
-
-        R = self.rotations[-1]
-        self.ax_orient.clear()
-        self.draw_orientation(R)
-        self.canvas_orient.draw()
+        if self.rotations_realtime:
+            R = self.rotations_realtime[-1]
+            self.ax_orient.clear()
+            self.draw_orientation(R)
+            self.canvas_orient.draw()
 
     def plot_euler_angles(self):
-        if not self.roll_data or not self.pitch_data or not self.yaw_data:
-            return
+        self.ax_angles.clear()
+        self.ax_angles.set_title("Roll / Pitch / Yaw (градусы)")
+        self.ax_angles.set_xlabel("Шаг")
+        self.ax_angles.set_ylabel("Угол (°)")
 
-        ax = self.ax_angles
-        ax.clear()
-        ax.set_title("Roll / Pitch / Yaw (градусы)")
-        ax.set_xlabel("Время (шаги)")
-        ax.set_ylabel("Угол (°)")
+        # === Углы из реального времени ===
+        if len(self.roll_data) > 0:
+            times_rt = np.arange(len(self.roll_data))
+            self.ax_angles.plot(times_rt, np.degrees(self.roll_data), 'r-', label="Roll (Realtime)")
+            self.ax_angles.plot(times_rt, np.degrees(self.pitch_data), 'g-', label="Pitch (Realtime)")
+            self.ax_angles.plot(times_rt, np.degrees(self.yaw_data), 'b-', label="Yaw (Realtime)")
 
-        times = np.arange(len(self.roll_data))
-        ax.plot(times, np.degrees(self.roll_data), 'r-', label="Roll (Madgwick)")
-        ax.plot(times, np.degrees(self.acc_roll_data), 'r--', label="Accel Roll")
+        # === Углы из CSV ===
+        if len(self.roll_data_csv) > 0:
+            end_index = self.slider_value + 1
+            times_csv = np.arange(end_index)
+            self.ax_angles.plot(times_csv, np.degrees(self.roll_data_csv[:end_index]), 'r--', label="Roll (CSV)")
+            self.ax_angles.plot(times_csv, np.degrees(self.pitch_data_csv[:end_index]), 'g--', label="Pitch (CSV)")
+            self.ax_angles.plot(times_csv, np.degrees(self.yaw_data_csv[:end_index]), 'b--', label="Yaw (CSV)")
 
-        ax.plot(times, np.degrees(self.pitch_data), 'g-', label="Pitch (Madgwick)")
-        ax.plot(times, np.degrees(self.acc_pitch_data), 'g--', label="Accel Pitch")
-
-        ax.plot(times, np.degrees(self.yaw_data), 'b-', label="Yaw (Madgwick)")
-
-        ax.legend()
-        ax.grid(True)
+        self.ax_angles.legend()
+        self.ax_angles.grid(True)
         self.canvas_angles.draw()
 
     def draw_orientation(self, rotation_matrix=np.eye(3)):
@@ -259,6 +362,7 @@ class RealTimeIMUViewer(QMainWindow):
         y_axis = rotation_matrix @ [0, scale, 0]
         z_axis = rotation_matrix @ [0, 0, scale]
 
+        self.ax_orient.clear()
         self.ax_orient.add_artist(Arrow3D(
             [origin[0], x_axis[0]], [origin[1], x_axis[1]], [origin[2], x_axis[2]],
             mutation_scale=10, lw=2, arrowstyle="-|>", color="r"
@@ -279,6 +383,6 @@ class RealTimeIMUViewer(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = RealTimeIMUViewer()
+    window = IMUApp()
     window.show()
     sys.exit(app.exec_())
